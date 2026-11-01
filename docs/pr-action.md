@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: nabondance/strata@v0.6.0
+      - uses: nabondance/strata@v0.7.0
 ```
 <!-- x-release-please-end -->
 
@@ -152,7 +152,7 @@ For precise totals per provider, set `precise: 'true'` and give the step the API
 
 <!-- x-release-please-start-version -->
 ```yaml
-      - uses: nabondance/strata@v0.6.0
+      - uses: nabondance/strata@v0.7.0
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -171,7 +171,7 @@ The Action can check token limits. No limit is set by default: each limit input 
 
 <!-- x-release-please-start-version -->
 ```yaml
-      - uses: nabondance/strata@v0.6.0
+      - uses: nabondance/strata@v0.7.0
         with:
           limit-increase: 500
           limit-up-front-tokens: claude=8000 codex=6000
@@ -195,6 +195,20 @@ How results are reported:
 
 The limits work like `strata diff`'s [limit flags](usage.md#limits): they use the comparison's measurement, never the precise counts. Being over a limit means the configuration passed a number your workflow chose, not that it got worse.
 
+## Leaving paths out
+
+A monorepo's example apps and templates can track their own agent configuration. The `ignore` input leaves those paths out of both commits, as `strata diff --ignore` does. Give `.gitignore`-style patterns separated by newlines or commas; spaces around each pattern are trimmed:
+
+```yaml
+      - uses: nabondance/strata@v0
+        with:
+          ignore: |
+            examples/**
+            templates/
+```
+
+A matching file is treated as untracked: it is not counted, and a Claude import of it is missing. The summary names the patterns, and the JSON delta lists them in `ignore`. [Leaving paths out](usage.md#leaving-paths-out) gives the pattern rules.
+
 ## Local use
 
 The Action runs `strata diff`. To run it yourself:
@@ -207,7 +221,7 @@ strata diff /path/to/repo --base <full-commit-id> --head <full-commit-id> --outp
 
 The last form writes both files from one comparison, as the Action does.
 
-The JSON delta has its own schema version, 13, and includes the report's measurement metadata. Both commits are measured the same way. The delta compares stored configuration in Git, not the context an agent loads in a session or the tokens you are billed for.
+The JSON delta has its own schema version, 14, and includes the report's measurement metadata. Both commits are measured the same way. The delta compares stored configuration in Git, not the context an agent loads in a session or the tokens you are billed for.
 
 ### What the delta contains
 
