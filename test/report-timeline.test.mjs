@@ -3,13 +3,23 @@ import test from "node:test";
 import { analyzeRepository } from "../dist/analyze.js";
 import { expandRevisions } from "../dist/expand.js";
 import { renderHtml } from "../dist/report.js";
-import { timelineDateTicks, timelineScale } from "../dist/timeline.js";
+import {
+  timelineBuckets,
+  timelineDateTicks,
+  timelineEdges,
+  timelineScale,
+  timelineStepsNote,
+} from "../dist/timeline.js";
 import { loadReportUi, previousChange, selectOptions } from "./report-ui.mjs";
 import { syntheticRepo } from "./synthetic-repo.mjs";
 
 const day = 24 * 60 * 60 * 1000;
 
-/** A short real history padded to 161 revisions every four days; every other padded revision repeats the last change. */
+/**
+ * A short real history padded to 161 revisions every four days; every other padded revision repeats the last change.
+ * The padded totals grow by 3 tokens a revision from the last real one, and every other one rises 200 more and falls
+ * back, so there are more changes than bars and some merged bars hide a higher total.
+ */
 async function longHistory() {
   const { repo, put, commit, cleanup } = syntheticRepo("strata-timeline-ui-");
   try {
@@ -23,12 +33,21 @@ async function longHistory() {
     // Line ages refer to revisions by index, so the padded history leaves them out.
     const real = report.revisions.map(({ lineAge: _lineAge, ...revision }) => revision);
     const last = real.at(-1);
-    const padded = Array.from({ length: 158 }, (_, index) => ({
-      ...last,
-      id: index.toString(16).padStart(40, "0"),
-      date: new Date(Date.parse("2024-03-01T12:00:00Z") + index * 4 * day).toISOString(),
-      changes: index % 2 ? [] : last.changes,
-    }));
+    const padded = Array.from({ length: 158 }, (_, index) => {
+      const extra = index * 3 + (index % 2 ? 200 : 0);
+      const instructions = last.categoryTotals.instructions;
+      return {
+        ...last,
+        id: index.toString(16).padStart(40, "0"),
+        date: new Date(Date.parse("2024-03-01T12:00:00Z") + index * 4 * day).toISOString(),
+        changes: index % 2 ? [] : last.changes,
+        categoryTotals: {
+          ...last.categoryTotals,
+          instructions: { ...instructions, estimatedTokens: instructions.estimatedTokens + extra },
+        },
+        estimatedTokens: last.estimatedTokens + extra,
+      };
+    });
     return { ...report, revisions: [...real, ...padded] };
   } finally {
     cleanup();
@@ -41,10 +60,28 @@ test("the history chart labels its axes, says when bars group revisions, and sho
   const { get } = loadReportUi(renderHtml(report));
   const chart = get("chart");
   assert.equal(chart.children.length, 100);
+  const buckets = timelineBuckets(
+    revisions.map((revision) => Object.values(revision.categoryTotals).map((total) => total.estimatedTokens)),
+  );
+  assert.equal(buckets.length, 100);
   assert.equal(get("chart-steps").hidden, false);
   assert.equal(
     get("chart-steps").textContent,
-    "161 revisions shown as 100 steps; each step shows the last revision in its group.",
+    "161 revisions and 160 changes shown as 100 steps, merging the most alike neighbors; each step shows the last revision in its group. A dashed line marks a higher total inside a step.",
+  );
+  assert.equal(get("chart-steps").textContent, timelineStepsNote(161, buckets, true));
+  // The masthead does not group: it draws a step for each of the 160 changes, two points each between the corners.
+  const silhouetteLayer = get("silhouette").children[0];
+  assert.equal(silhouetteLayer.style.clipPath.split(",").length, 2 * 160 + 2);
+  // A merged bar that hides a higher total draws a dashed line at it, on the bars' scale.
+  const peaked = buckets.findIndex((bucket) => bucket.peak > revisions[bucket.end].estimatedTokens);
+  assert.ok(peaked >= 0);
+  const peakLine = chart.children[peaked].children.find((child) => child.className === "peak");
+  const scaleTop = timelineScale(Math.max(...revisions.map((revision) => revision.estimatedTokens))).top;
+  assert.equal(peakLine.style.bottom, `${((buckets[peaked].peak / scaleTop) * 210).toFixed(1)}px`);
+  assert.equal(
+    chart.children.filter((bar) => bar.children.some((child) => child.className === "peak")).length,
+    buckets.filter((bucket) => bucket.peak > revisions[bucket.end].estimatedTokens).length,
   );
 
   // Round y-axis steps in the SVG image's compact style, the top one at the top of the plot.
@@ -75,7 +112,11 @@ test("the history chart labels its axes, says when bars group revisions, and sho
   // The hover card names the revisions, the date shown, and the tokens per category, top layer first.
   const tip = get("chart-tip");
   assert.equal(tip.hidden, true);
-  const bar = chart.children.find((child) => child.getAttribute("aria-label").startsWith("Revisions "));
+  const barIndex = buckets.findIndex(
+    (bucket) => bucket.changes > 1 && bucket.peak > revisions[bucket.end].estimatedTokens,
+  );
+  const bar = chart.children[barIndex];
+  const shown = revisions[buckets[barIndex].end];
   chart.listeners.pointermove({ target: bar.children[0], clientX: 300 });
   assert.equal(tip.hidden, false);
   // Moving within the same bar only moves the card; another bar refills it.
@@ -88,13 +129,18 @@ test("the history chart labels its axes, says when bars group revisions, and sho
   chart.listeners.pointermove({ target: bar, clientX: 300 });
   assert.match(tip.children[0].textContent, /^Revisions \d+–\d+$/);
   assert.match(tip.children[1].textContent, /^\d{4}-\d{2}-\d{2} · the last of these \d+$/);
-  const total = tip.children.at(-1);
+  // A merged bar counts its changes and gives the highest total it hides, after the total it shows.
+  assert.equal(tip.children[2].textContent, `${buckets[barIndex].changes} changes in these revisions`);
+  const total = tip.children.at(-2);
   assert.equal(total.textContent, "Total estimated tokens");
-  assert.equal(total.children.at(-1).textContent, new Intl.NumberFormat().format(revisions.at(-1).estimatedTokens));
-  assert.ok(tip.children.slice(2, -1).every((row) => row.className === "history-tip-row"));
+  assert.equal(total.children.at(-1).textContent, new Intl.NumberFormat().format(shown.estimatedTokens));
+  const highest = tip.children.at(-1);
+  assert.equal(highest.textContent, "Highest in these revisions");
+  assert.equal(highest.children.at(-1).textContent, new Intl.NumberFormat().format(buckets[barIndex].peak));
+  assert.ok(tip.children.slice(3, -2).every((row) => row.className === "history-tip-row"));
   assert.match(
     bar.getAttribute("aria-label"),
-    /^Revisions \d+–\d+ · \d{4}-\d{2}-\d{2} · [\d,]+ estimated tokens at the last one$/,
+    /^Revisions \d+–\d+ · \d{4}-\d{2}-\d{2} · [\d,]+ estimated tokens at the last one, up to [\d,]+ in these revisions$/,
   );
   assert.equal(bar.title, undefined);
   chart.listeners.pointerleave();
@@ -103,6 +149,61 @@ test("the history chart labels its axes, says when bars group revisions, and sho
   assert.equal(tip.hidden, false);
   chart.listeners.focusout();
   assert.equal(tip.hidden, true);
+
+  // By time, each bar is as wide as the time until the next one, with no gap; Change goes back to equal widths.
+  const spacing = get("chart-spacing").children.filter(
+    (child) => child.tagName === "BUTTON" || child.type === "button",
+  );
+  assert.deepEqual(
+    spacing.map((button) => [button.textContent, button.getAttribute("aria-pressed")]),
+    [
+      ["Change", "true"],
+      ["Time", "false"],
+    ],
+  );
+  spacing[1].listeners.click();
+  assert.equal(chart.classes.has("by-time"), true);
+  const columns = chart.style.gridTemplateColumns.split(") ").map((column) => Number.parseFloat(column.split(", ")[1]));
+  assert.equal(columns.length, buckets.length);
+  const time = (index) => Date.parse(revisions[index].date);
+  const timeWidths = buckets.map((bucket, index) =>
+    Math.max(
+      0,
+      (index + 1 < buckets.length ? time(buckets[index + 1].start) : time(revisions.length - 1)) - time(bucket.start),
+    ),
+  );
+  // The last bar, with no next one to end at, is at least as wide as an average bar.
+  const elapsed = time(revisions.length - 1) - time(buckets[0].start);
+  timeWidths[timeWidths.length - 1] = Math.max(timeWidths.at(-1), elapsed / timeWidths.length);
+  const span = timeWidths.reduce((sum, width) => sum + width, 0);
+  const expectedWidth = (timeWidths[0] / span) * 1000;
+  assert.ok(Math.abs(columns[0] - expectedWidth) < 0.01, `${columns[0]} vs ${expectedWidth}`);
+  assert.ok(Math.abs(columns.at(-1) - (timeWidths.at(-1) / span) * 1000) < 0.01);
+  assert.ok(columns.at(-1) >= (elapsed / columns.length / span) * 1000 - 0.01);
+  assert.match(
+    get("chart-steps").textContent,
+    / Each bar is as wide as the time until the next one; the last is at least as wide as an average bar\.$/,
+  );
+  // The widened last bar adds width, not time: no calendar label falls after the latest revision.
+  const latestMonth = revisions.at(-1).date.slice(0, 7);
+  for (const label of get("timeline-dates").children) assert.ok(label.textContent <= latestMonth, label.textContent);
+  // The slider follows the bars by time: its position for a bar's last revision lies inside that bar's time span.
+  const timeEdges = timelineEdges(buckets.length, timeWidths);
+  const probe = buckets[50];
+  get("target").value = String(probe.end);
+  get("target").listeners.change();
+  const position = Number(get("slider").value) / 10000;
+  assert.ok(position >= timeEdges[50][0] && position <= timeEdges[50][1], `${position} vs ${timeEdges[50]}`);
+  // Its arrow keys step one revision at a time; Page Up moves a bar.
+  get("slider").listeners.keydown({ key: "ArrowLeft", preventDefault() {} });
+  assert.equal(get("target").value, String(probe.end - 1));
+  get("slider").listeners.keydown({ key: "PageUp", preventDefault() {} });
+  assert.equal(get("target").value, String(probe.end));
+  const bySpacing = get("chart-spacing").children.filter((child) => child.type === "button");
+  assert.equal(bySpacing[1].getAttribute("aria-pressed"), "true");
+  bySpacing[0].listeners.click();
+  assert.equal(chart.classes.has("by-time"), false);
+  assert.equal(chart.style.gridTemplateColumns, "repeat(100, minmax(0, 1fr))");
 
   // A provider tab redraws the axis on that view's scale.
   const before = get("chart-ticks").children;

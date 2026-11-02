@@ -12,7 +12,7 @@ There are three ways to use it in CI:
 
 None of them runs unless you add a workflow to the repository you want to analyze.
 
-Strata's own repository runs the [pull-request delta](../.github/workflows/strata-pr-delta.yml) and the [README image](../.github/workflows/strata-image.yml) workflows on itself. The only difference from the examples below is that they build Strata from the checkout instead of running the published package.
+Strata's own repository runs the [pull-request delta](../.github/workflows/strata-pr-delta.yml) and the [README image](../.github/workflows/strata-image.yml) workflows on itself. The only difference from the examples below is that they build Strata from the checkout instead of running the published package. It also publishes a [demo gallery](https://nabondance.github.io/strata/) of reports on other public repositories with [demo-site.yml](../.github/workflows/demo-site.yml).
 
 ## Full history report as an artifact
 
@@ -54,7 +54,7 @@ Download `strata-report` from the workflow run and open `report.html` in a brows
 Notes on the example:
 
 - Strata creates the output directory itself.
-- Each action is pinned to a commit SHA, as this repository's own workflows do. Review and update those pins like any other dependency.
+- Each action is pinned to a commit SHA, as this repository's workflows that can write and the Strata Action are. A tag such as `v7` can be moved to other code; a commit cannot. Review and update those pins like any other dependency (Dependabot can update them).
 - `persist-credentials: false` keeps the job token out of the checkout's Git configuration, since nothing in the job pushes.
 
 ### Checkout depth

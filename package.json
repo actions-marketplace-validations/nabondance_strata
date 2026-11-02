@@ -13,10 +13,21 @@
   },
   "author": "nabondance",
   "keywords": [
-    "ai-agent",
+    "agents-md",
+    "ai-agents",
     "claude-code",
+    "claude-md",
     "codex",
+    "context-engineering",
+    "copilot",
+    "cursor",
+    "gemini-cli",
     "git-history",
+    "github-action",
+    "llm",
+    "prompt-engineering",
+    "skills",
+    "tokens",
     "visualization"
   ],
   "type": "module",
@@ -33,7 +44,7 @@
     "skills"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/source-digest.mjs --write dist/source-digest.txt",
     "prepack": "pnpm build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "pnpm build && node dist/cli.js",

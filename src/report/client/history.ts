@@ -50,9 +50,27 @@ export const historyScript = `    function renderLegend() {
       chartBuckets = [];
       // Leading revisions with nothing tracked in this view would only flatten the chart.
       chartStart = Math.max(0, viewRevisions.findIndex((revision) => revision.components.length));
-      const buckets = timelineBuckets(viewRevisions.length, 100, chartStart);
-      slider.min = chartStart;
-      chart.style.gridTemplateColumns = 'repeat(' + buckets.length + ', minmax(0, 1fr))';
+      // A bar starts wherever the drawn layers change; the most alike neighbors merge when there are more than 100.
+      const values = viewRevisions.map((revision) => categories.map((category) => revision.categoryTotals[category].estimatedTokens));
+      const buckets = timelineBuckets(values, 100, chartStart);
+      renderChartSpacing();
+      // By time, a bar lasts from its first revision to the next bar's, and the last one to the latest revision.
+      // Dates need not increase (clock skew, a rebase), so a bar never gets a negative width.
+      const time = (index) => Date.parse(viewRevisions[index].date);
+      const t0 = time(buckets[0]?.start ?? chartStart);
+      const t1 = time(viewRevisions.length - 1);
+      const byTime = chartSpacing === 'time' && t1 > t0;
+      const widths = buckets.map((bucket, index) => Math.max(0, (index + 1 < buckets.length ? time(buckets[index + 1].start) : t1) - time(bucket.start)));
+      // The last bar has no next one to end at, and the latest change is often days or minutes before the latest
+      // revision, which would leave the selected bar a hairline. It is at least as wide as an average bar.
+      if (widths.length) widths[widths.length - 1] = Math.max(widths[widths.length - 1], (t1 - t0) / widths.length);
+      const span = widths.reduce((sum, width) => sum + width, 0);
+      chart.classList.toggle('by-time', byTime);
+      // Where each bar sits across the chart, so the slider can follow the bars in either spacing.
+      chartEdges = timelineEdges(buckets.length, byTime ? widths : undefined);
+      chart.style.gridTemplateColumns = byTime
+        ? widths.map((width) => 'minmax(1px, ' + (width / span * 1000).toFixed(3) + 'fr)').join(' ')
+        : 'repeat(' + buckets.length + ', minmax(0, 1fr))';
       const max = Math.max(1, ...viewRevisions.map((revision) => revision.estimatedTokens));
       // The scale covers every charted revision, not only the last of each step, and changes with the view and measure.
       const scale = timelineScale(max);
@@ -67,7 +85,8 @@ export const historyScript = `    function renderLegend() {
         const button = text('button', '', 'bar');
         button.type = 'button';
         // The hover card shows this at once, so a native title would only repeat it late.
-        button.setAttribute('aria-label', bucketRange(bucket) + ' · ' + revision.date.slice(0, 10) + ' · ' + fmt(revision.estimatedTokens) + ' ' + inlineStat() + ' at ' + (bucket.start === bucket.end ? 'this revision' : 'the last one'));
+        const higher = bucket.peak > revision.estimatedTokens;
+        button.setAttribute('aria-label', bucketRange(bucket) + ' · ' + revision.date.slice(0, 10) + ' · ' + fmt(revision.estimatedTokens) + ' ' + inlineStat() + ' at ' + (bucket.start === bucket.end ? 'this revision' : 'the last one') + (higher ? ', up to ' + fmt(bucket.peak) + ' in these revisions' : ''));
         const stack = text('span', '', 'stack');
         stack.style.height = Math.max(2, revision.estimatedTokens / scale.top * 210) + 'px';
         for (const category of categories) {
@@ -79,6 +98,12 @@ export const historyScript = `    function renderLegend() {
           stack.append(segment);
         }
         button.append(stack);
+        // A merged bar can hide a higher total; a dashed line marks it.
+        if (higher) {
+          const peak = text('span', '', 'peak');
+          peak.style.bottom = (bucket.peak / scale.top * 210).toFixed(1) + 'px';
+          button.append(peak);
+        }
         // Safari does not focus a clicked button, and arrow keys need the focus on a bar.
         button.addEventListener('click', () => {
           render(bucket.end);
@@ -88,27 +113,72 @@ export const historyScript = `    function renderLegend() {
         chartBuckets.push({ ...bucket, button });
       }
       // Calendar boundaries between the end dates; CSS keeps only the middle one on a narrow screen.
-      $('timeline-dates').replaceChildren(...timelineDateTicks(buckets.map((bucket) => viewRevisions[bucket.end].date)).map((tick) => {
+      // By time, the labels sit at their dates: one evenly spaced date per 0.5% of the width stands in for the bars.
+      const tickDates = byTime
+        ? Array.from({ length: 200 }, (_, index) => new Date(Math.min(t1, t0 + (index / 200) * span)).toISOString())
+        : buckets.map((bucket) => viewRevisions[bucket.end].date);
+      $('timeline-dates').replaceChildren(...timelineDateTicks(tickDates).map((tick) => {
         const label = text('span', tick.label, tick.primary ? 'primary' : '');
-        label.style.left = (tick.at / buckets.length * 100).toFixed(2) + '%';
+        label.style.left = (tick.at / tickDates.length * 100).toFixed(2) + '%';
         return label;
       }));
       const charted = viewRevisions.length - chartStart;
-      $('chart-steps').hidden = buckets.length >= charted;
-      $('chart-steps').textContent = fmt(charted) + ' revisions shown as ' + fmt(buckets.length) + ' steps; each step shows the last revision in its group.';
+      const note = timelineStepsNote(charted, buckets, buckets.some((bucket) => bucket.peak > viewRevisions[bucket.end].estimatedTokens), fmt);
+      const spacingNote = byTime ? 'Each bar is as wide as the time until the next one; the last is at least as wide as an average bar.' : '';
+      $('chart-steps').hidden = !note && !spacingNote;
+      $('chart-steps').textContent = [note, spacingNote].filter(Boolean).join(' ');
       $('timeline-start').textContent = viewRevisions[chartStart].date.slice(0, 10);
       $('timeline-end').textContent = viewRevisions.at(-1).date.slice(0, 10);
-      renderSilhouette(buckets, max);
+      renderSilhouette(values, chartStart, max);
+    }
+
+    /** The switch between bars of equal width and bars as wide as the time they cover. */
+    function renderChartSpacing() {
+      const container = $('chart-spacing');
+      container.replaceChildren(text('span', 'Space bars by'));
+      for (const [key, label] of [['change', 'Change'], ['time', 'Time']]) {
+        const button = text('button', label);
+        button.type = 'button';
+        button.setAttribute('aria-pressed', String(chartSpacing === key));
+        button.addEventListener('click', () => {
+          if (chartSpacing === key) return;
+          chartSpacing = key;
+          renderChart();
+          render(selected);
+        });
+        container.append(button);
+      }
     }
 
     const slider = $('slider');
+    // The slider runs along the chart's width rather than through the revisions, so its thumb stays over the bar it
+    // selects whether the bars are spaced by change or by time. Within a bar, its revisions share the bar's width.
+    const sliderSteps = 10000;
+    /** The slider position of a revision, and the revision at a slider position, by the bars' edges. */
+    const sliderPosition = (index) => Math.round(timelinePosition(chartBuckets, chartEdges, index) * sliderSteps);
+    const sliderRevision = (position) => timelineRevision(chartBuckets, chartEdges, position / sliderSteps) ?? selected;
 
     /** Wires the slider, the chart's arrow keys and hover card, and the revision selects. */
     function setupHistory() {
-      slider.max = revisions.length - 1;
+      slider.min = 0;
+      slider.max = sliderSteps;
       // While the slider is dragged, the file and comparison tables wait until it settles; the rest follows it live.
-      slider.addEventListener('input', () => render(Number(slider.value), true));
-      slider.addEventListener('change', () => render(Number(slider.value)));
+      slider.addEventListener('input', () => render(sliderRevision(Number(slider.value)), true));
+      slider.addEventListener('change', () => render(sliderRevision(Number(slider.value))));
+      // Its arrow keys still step one revision at a time; Page Up and Page Down move a bar.
+      slider.addEventListener('keydown', (event) => {
+        const at = chartBuckets.findIndex((bucket) => bucket.start <= selected && selected <= bucket.end);
+        const first = chartBuckets[0]?.start ?? 0;
+        const last = chartBuckets.at(-1)?.end ?? 0;
+        const next = {
+          ArrowLeft: selected - 1, ArrowDown: selected - 1, ArrowRight: selected + 1, ArrowUp: selected + 1,
+          PageDown: chartBuckets[Math.max(0, at - 1)]?.end, PageUp: chartBuckets[Math.min(chartBuckets.length - 1, at + 1)]?.end,
+          Home: first, End: last,
+        }[event.key];
+        if (next === undefined) return;
+        event.preventDefault();
+        render(Math.max(first, Math.min(last, next)));
+      });
       // The bars are one tab stop; arrow keys, Home, and End move the selection between them.
       $('chart').addEventListener('keydown', (event) => {
         const at = chartBuckets.findIndex((bucket) => bucket.button === event.target);
@@ -159,6 +229,7 @@ export const historyScript = `    function renderLegend() {
       const revision = viewRevisions[bucket.end];
       const steps = bucket.end - bucket.start + 1;
       const rows = [text('b', bucketRange(bucket)), text('span', revision.date.slice(0, 10) + (steps > 1 ? ' · the last of these ' + fmt(steps) : ''), 'history-tip-date')];
+      if (bucket.changes > 1) rows.push(text('span', fmt(bucket.changes) + ' changes in these revisions', 'history-tip-date'));
       for (const category of [...categories].reverse()) {
         const amount = revision.categoryTotals[category].estimatedTokens;
         if (!amount) continue;
@@ -172,6 +243,11 @@ export const historyScript = `    function renderLegend() {
       const total = text('span', 'Total ' + inlineStat(), 'history-tip-row history-tip-total');
       total.append(text('b', fmt(revision.estimatedTokens)));
       rows.push(total);
+      if (bucket.peak > revision.estimatedTokens) {
+        const peak = text('span', 'Highest in these revisions', 'history-tip-row');
+        peak.append(text('b', fmt(bucket.peak)));
+        rows.push(peak);
+      }
       tip.replaceChildren(...rows);
       tip.hidden = false;
       const plot = $('history-plot').getBoundingClientRect();

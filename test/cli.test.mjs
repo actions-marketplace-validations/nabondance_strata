@@ -187,7 +187,7 @@ test("incremental history matches a full tree listing at every revision", async 
         .every((segment) => shareableConventions.names.has(segment) || /^[df]\d+(\.(md|sh))?$/.test(segment));
     for (const component of shareable.components) assert.ok(aliased(component.path), component.path);
     for (const revision of shareable.revisions) {
-      for (const change of revision.changes) {
+      for (const change of revision.changes ?? []) {
         assert.ok(aliased(change.path), change.path);
         if (change.previousPath !== undefined) assert.ok(aliased(change.previousPath), change.previousPath);
       }
@@ -1044,6 +1044,7 @@ function actionRunner(temp, defaults) {
       env: {
         ...process.env,
         GITHUB_ACTION_PATH: resolve("."),
+        STRATA_DIST: resolve("dist"),
         RUNNER_TEMP: runner,
         GITHUB_STEP_SUMMARY: summary,
         GITHUB_OUTPUT: output,

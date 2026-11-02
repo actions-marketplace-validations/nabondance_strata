@@ -33,8 +33,17 @@ test("draws instruction age by period, marks a shallow start, and follows the ke
     const dates = report.revisions.map((revision) => revision.date.slice(0, 10));
 
     // More than eight years keeps one layer a year; in a shallow clone the first is "or earlier".
-    const shallow = { ...report, shallow: true };
+    // With CLAUDE.md alone, Claude + shared would repeat All files, so there are no view tabs.
+    assert.equal(loadReportUi(renderHtml(report)).get("provider-tabs").hidden, true);
+    // A Codex file in the table, even one no revision holds, makes the Claude view differ, so its tab comes back.
+    const codexOnly = { ...report.components[0], provider: "codex", path: ".codex/unused.md" };
+    const shallow = { ...report, shallow: true, components: [...report.components, codexOnly] };
     const { get } = loadReportUi(renderHtml(shallow));
+    assert.equal(get("provider-tabs").hidden, false);
+    assert.deepEqual(
+      get("provider-tabs").children.map((tab) => tab.textContent),
+      ["All files", "Claude + shared", "Codex + shared"],
+    );
     assert.equal(get("age-panel").hidden, false);
     const chart = get("age-chart");
     assert.equal(chart.children.length, 10);
@@ -479,10 +488,10 @@ test("the masthead silhouette follows the provider view and marks the selected r
     const mark = () => get("silhouette").children.at(-1);
     assert.equal(layers().length, 2);
     assert.equal(mark().hidden, false);
-    assert.equal(mark().style.left, "83.33%");
+    assert.equal(mark().style.left, "83.333%");
     get("target").value = "0";
     get("target").listeners.change();
-    assert.equal(mark().style.left, "16.67%");
+    assert.equal(mark().style.left, "16.667%");
     // Codex reads only AGENTS.md, so its view has one layer, drawn from the last revision.
     get("provider-tabs")
       .children.find((tab) => tab.textContent === "Codex + shared")
@@ -492,7 +501,7 @@ test("the masthead silhouette follows the provider view and marks the selected r
     get("target").value = "2";
     get("target").listeners.change();
     assert.equal(mark().hidden, false);
-    assert.equal(mark().style.left, "50.00%");
+    assert.equal(mark().style.left, "50.000%");
   } finally {
     cleanup();
   }

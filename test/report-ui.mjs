@@ -1,10 +1,34 @@
 import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
 import { compareRevisions } from "../dist/compare.js";
-import { expandRevisions } from "../dist/expand.js";
+import { expandRevisions, fillRevisions } from "../dist/expand.js";
 import { instructionAgePeriods, instructionAges, sharePercent } from "../dist/instruction-age.js";
 import { viewRevision } from "../dist/provider-view.js";
-import { timelineBuckets, timelineScale } from "../dist/timeline.js";
+import {
+  timelineBuckets,
+  timelineEdges,
+  timelinePosition,
+  timelineScale,
+  timelineStepsNote,
+} from "../dist/timeline.js";
+
+/**
+ * The slider value that selects a revision in the All files view with bars spaced by change: the slider runs along
+ * the chart's width, not through the revisions.
+ */
+export function sliderValue(report, index) {
+  const revisions = expandRevisions(report);
+  const start = Math.max(
+    0,
+    revisions.findIndex((revision) => revision.components.length),
+  );
+  const buckets = timelineBuckets(
+    revisions.map((revision) => Object.values(revision.categoryTotals).map((total) => total.estimatedTokens)),
+    100,
+    start,
+  );
+  return String(Math.round(timelinePosition(buckets, timelineEdges(buckets.length), index) * 10000));
+}
 
 /** Run the report's script against a minimal fake DOM and return its elements by ID. */
 export function loadReportUi(html) {
@@ -137,18 +161,24 @@ export function exerciseReportUi(html, report) {
   assert.deepEqual(tickLabels(), expectedTicks(revisions.map((revision) => revision.estimatedTokens)));
   assert.ok(tickLabels().length >= 3 && tickLabels().length <= 5);
   assert.equal(get("chart-ticks").children.at(-1).style.bottom, "210.0px");
-  const charted =
-    revisions.length -
-    Math.max(
-      0,
-      revisions.findIndex((revision) => revision.components.length),
-    );
-  assert.equal(get("chart-steps").hidden, charted <= 100);
-  if (charted > 100)
-    assert.equal(
-      get("chart-steps").textContent,
-      `${new Intl.NumberFormat().format(charted)} revisions shown as 100 steps; each step shows the last revision in its group.`,
-    );
+  const firstCharted = Math.max(
+    0,
+    revisions.findIndex((revision) => revision.components.length),
+  );
+  const charted = revisions.length - firstCharted;
+  const chartBuckets = timelineBuckets(
+    revisions.map((revision) => Object.values(revision.categoryTotals).map((total) => total.estimatedTokens)),
+    100,
+    firstCharted,
+  );
+  const note = timelineStepsNote(
+    charted,
+    chartBuckets,
+    chartBuckets.some((bucket) => bucket.peak > revisions[bucket.end].estimatedTokens),
+    (value) => new Intl.NumberFormat().format(value),
+  );
+  assert.equal(get("chart-steps").hidden, !note);
+  assert.equal(get("chart-steps").textContent, note);
   // The selects list the first, the latest, and every revision that changed something, after the two relative choices.
   const listed = revisions.filter(
     (revision, index) => !index || index === revisions.length - 1 || revision.changes.length,
@@ -172,6 +202,26 @@ export function exerciseReportUi(html, report) {
   assert.equal(mark.className, "silhouette-mark");
   assert.equal(mark.hidden, !silhouetteLayers.length);
   assert.equal(get("repo").textContent, report.repository);
+  // Last change is the token change at the latest revision that changed a file, the one Previous change compares.
+  let lastChanged = revisions.length - 1;
+  while (lastChanged >= 0 && !revisions[lastChanged].changes.length) lastChanged -= 1;
+  const lastDelta =
+    lastChanged < 0 ? 0 : revisions[lastChanged].estimatedTokens - (revisions[lastChanged - 1]?.estimatedTokens ?? 0);
+  assert.equal(get("delta").textContent, (lastDelta > 0 ? "+" : "") + new Intl.NumberFormat().format(lastDelta));
+  assert.equal(
+    get("delta-when").textContent,
+    lastChanged < 0
+      ? "none yet"
+      : lastChanged === revisions.length - 1
+        ? "at this revision"
+        : `on ${revisions[lastChanged].date.slice(0, 10)}`,
+  );
+  // A map row with no stored text shows its source size, the size its hollow mark stands for.
+  for (const row of get("config-map").children.filter((child) => child.className?.startsWith("map-row"))) {
+    const size = row.children.at(-1);
+    if (size.className === "map-size bytes") assert.match(size.textContent, /^[\d.,]+ (B|kB|MB)$/);
+    else assert.match(size.textContent, /^[\d,]+$/);
+  }
   // Long lists start with their first rows; the rest of this exercise runs with them expanded.
   assert.equal(get("files").children.length, Math.min(25, revisions.at(-1).components.length) || 1);
   assert.equal(get("files-more").hidden, revisions.at(-1).components.length <= 25);
@@ -212,14 +262,22 @@ export function exerciseReportUi(html, report) {
     get("compare-categories").children.length,
     expected.byCategory.filter((group) => group.deltaFiles || group.deltaTokens).length || 1,
   );
-  assert.equal(get("slider").value, 3);
-  // Instruction age: one bar per charted revision, a legend entry per period present, and the text kept from the baseline.
+  assert.equal(String(get("slider").value), sliderValue(report, 3));
+  assert.match(get("slider").getAttribute("aria-valuetext"), /^Revision 4 of [\d,]+, \d{4}-\d{2}-\d{2}$/);
+  // Instruction age: one bar per change in the amount of text, a legend entry per period present, and the text kept from the baseline.
   const ages = instructionAges(report);
   const ageStart = ages.bytes.findIndex((amount) => amount > 0);
   assert.equal(get("age-panel").hidden, ageStart < 0);
   if (ageStart >= 0) {
     const periods = instructionAgePeriods(report);
-    assert.equal(get("age-chart").children.length, Math.min(100, ages.bytes.length - ageStart));
+    assert.equal(
+      get("age-chart").children.length,
+      timelineBuckets(
+        ages.bytes.map((bytes) => [bytes]),
+        100,
+        ageStart,
+      ).length,
+    );
     const presentPeriods = new Set(ages.at(3).map((cohort) => periods.periodOf.get(cohort.from)));
     assert.equal(get("age-legend").children.length, presentPeriods.size);
     assert.ok(get("age-legend").children.every((entry) => /%$/.test(entry.children.at(-1).textContent)));
@@ -255,7 +313,11 @@ export function exerciseReportUi(html, report) {
     if (ages.bytes[3]) assert.equal(get("compare-kept").textContent, kept(3, 4));
     // A bar selects the last revision it covers, like the history chart.
     get("age-chart").children[0].listeners.click();
-    const firstBucket = timelineBuckets(ages.bytes.length, 100, ageStart)[0];
+    const firstBucket = timelineBuckets(
+      ages.bytes.map((bytes) => [bytes]),
+      100,
+      ageStart,
+    )[0];
     assert.equal(get("target").value, String(firstBucket.end));
     get("baseline").value = "2";
     get("baseline").listeners.change();
@@ -281,8 +343,15 @@ export function exerciseReportUi(html, report) {
     0,
     revisions.findIndex((revision) => revision.components.length),
   );
-  assert.equal(get("chart").children.length, Math.min(100, revisions.length - chartStart));
-  assert.equal(get("slider").min, chartStart);
+  assert.equal(get("chart").children.length, chartBuckets.length);
+  assert.equal(get("slider").max, 10000);
+  // The slider's left end selects the first charted revision.
+  get("slider").value = "0";
+  get("slider").listeners.change();
+  assert.equal(get("target").value, String(chartStart));
+  get("slider").value = sliderValue(report, 3);
+  get("slider").listeners.change();
+  assert.equal(get("target").value, "3");
   get("provider-filter").value = "claude";
   get("provider-filter").listeners.change();
   const claudeFiles = revisions[3].components.filter((component) => component.provider === "claude").length;
@@ -331,7 +400,7 @@ export function exerciseReportUi(html, report) {
     if (!measured) return;
     assert.equal(
       get("tokens").textContent,
-      new Intl.NumberFormat().format(report.revisions[4].providerTokenTotals[provider] ?? 0),
+      new Intl.NumberFormat().format(fillRevisions(report.revisions)[4].providerTokenTotals[provider] ?? 0),
     );
     assert.match(get("tokens-label").textContent, new RegExp(`^${provider[0].toUpperCase()}${provider.slice(1)} `));
     assert.ok(get("counting-rows").children.some((row) => row.title.includes(measured.model)));
@@ -380,7 +449,7 @@ export function exerciseReportUi(html, report) {
   assert.equal(get("tokens").textContent, new Intl.NumberFormat().format(revisions[4].estimatedTokens));
   // Dragging the slider updates the summary at once and the file table once it settles.
   assert.notEqual(revisions[2].components, revisions[4].components);
-  get("slider").value = "2";
+  get("slider").value = sliderValue(report, 2);
   get("slider").listeners.input();
   assert.equal(get("tokens").textContent, new Intl.NumberFormat().format(revisions[2].estimatedTokens));
   assert.equal(get("files").children.length, revisions[4].components.length);
@@ -393,7 +462,7 @@ export function exerciseReportUi(html, report) {
     compareRevisions(revisions[2], revisions[2]).components.length || 1,
   );
   assert.notEqual(get("compare-components").children.length, comparedRows);
-  get("slider").value = "3";
+  get("slider").value = sliderValue(report, 3);
   get("slider").listeners.input();
   get("slider").listeners.change();
   assert.equal(get("files").children.length, revisions[3].components.length);
