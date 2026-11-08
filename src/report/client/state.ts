@@ -52,7 +52,7 @@ export const stateScript = `    const $ = (id) => document.getElementById(id);
     // What a map row's figure is, inside a sentence.
     const rowTokens = () => activeMeasure === 'estimate' ? 'stored-text tokens' : inlineStat();
     function measureLabel() {
-      if (activeMeasure === 'estimate') return { stat: tokenAdjective + ' tokens', compare: tokenAdjective + ' stored-text tokens', meta: data.measurement.label };
+      if (activeMeasure === 'estimate') return { stat: tokenAdjective + ' tokens', compare: tokenAdjective + ' stored-text tokens', meta: data.measurement.accuracy === 'estimate' ? '' : data.measurement.label };
       const measured = measures.get(activeMeasure);
       const kind = measured.accuracy === 'api-counted' ? 'API-counted' : 'exact';
       const name = providerNames[activeMeasure];
@@ -99,7 +99,7 @@ export const stateScript = `    const $ = (id) => document.getElementById(id);
       $('repo-meta').replaceChildren(
         text('span', data.branch + ' · ' + fmt(revisions.length) + ' revisions · '),
         text('span', revisions[0].date.slice(0, 10) + ' → ' + revisions.at(-1).date.slice(0, 10), 'nowrap'),
-        text('span', ' · ' + label.meta),
+        ...(label.meta ? [text('span', ' · ' + label.meta)] : []),
       );
     }
     function renderMeasureSwitch() {
@@ -128,6 +128,14 @@ export const stateScript = `    const $ = (id) => document.getElementById(id);
     // 'change' gives every bar the same width; 'time' makes each as wide as the time its configuration lasted.
     let chartSpacing = 'change';
     let chartStart = 0;
+    // The revisions a drag zoomed the chart into, or null for the whole history; chartRange is what the chart shows.
+    let chartZoom = null;
+    let chartRange = { start: 0, end: 0 };
+    // Zoomed in, the whole history's bars under the chart, and where the zoomed range sits across them, 0 to 1.
+    let overviewBars = null;
+    let overviewWindow = [0, 1];
+    // Set for a moment after a drag, so the click that ends it does not select a bar.
+    let chartDragged = false;
     let treemapLabels = [];
     // What the line under the treemap says while no rectangle is hovered or focused.
     let treemapNote = '';
