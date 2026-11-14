@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: nabondance/strata@v0.8.0
+      - uses: nabondance/strata@v0.8.1
 ```
 <!-- x-release-please-end -->
 
@@ -111,7 +111,7 @@ The examples pin the latest release; Release Please updates that version in thes
 - `nabondance/strata@v0` follows every 0.x release. A minor 0.x release can change the summary or the inputs.
 - To change versions only when you choose, pin a release or a commit SHA you have reviewed.
 
-At a release, the Action runs that version of the `context-strata` npm package, the tarball the publish workflow built, rather than building Strata. The package records a digest of the source it was built from, and the Action first reads it from the tarball and compares it with its own source. Only on a match does it install the package. It then checks the registry signatures with `npm audit signatures`, and requires a provenance attestation that names this repository's publish workflow, the release tag, and the installed tarball. When the digests differ, as at a commit whose source changed after the release, the Action builds Strata from its own source with the locked dependencies, as it does when npm cannot serve or verify the package (with a warning). A later call in the same job reuses the first install or build. The `install` output says which was used.
+At a release, the Action runs that version of the `context-strata` npm package, the tarball the publish workflow built, rather than building Strata. The package records a digest of the source it was built from, and the Action first reads it from the tarball and compares it with its own source. Only on a match does it install the package. It then checks the registry signatures with `npm audit signatures`, run with a pinned npm 11 because the npm on GitHub's runners does not list verified packages, and requires a provenance attestation that names this repository's publish workflow, the release tag, and the installed tarball. When the digests differ, as at a commit whose source changed after the release, the Action builds Strata from its own source with the locked dependencies, as it does when npm cannot serve or verify the package (with a warning). A later call in the same job reuses the first install or build. The `install` output says which was used.
 
 ## Outputs
 
@@ -153,7 +153,7 @@ For precise totals per provider, set `precise: 'true'` and give the step the API
 
 <!-- x-release-please-start-version -->
 ```yaml
-      - uses: nabondance/strata@v0.8.0
+      - uses: nabondance/strata@v0.8.1
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -172,7 +172,7 @@ The Action can check token limits. No limit is set by default: each limit input 
 
 <!-- x-release-please-start-version -->
 ```yaml
-      - uses: nabondance/strata@v0.8.0
+      - uses: nabondance/strata@v0.8.1
         with:
           limit-increase: 500
           limit-up-front-tokens: claude=8000 codex=6000
