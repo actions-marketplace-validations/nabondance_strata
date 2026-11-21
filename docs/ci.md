@@ -39,7 +39,7 @@ jobs:
           node-version: '22'
       - name: Analyze history
         env:
-          STRATA_VERSION: 0.8.1 # x-release-please-version
+          STRATA_VERSION: 0.9.0 # x-release-please-version
         run: |
           npx --yes "context-strata@$STRATA_VERSION" analyze "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/strata/report.html"
           npx --yes "context-strata@$STRATA_VERSION" analyze "$GITHUB_WORKSPACE" --format json --output "$RUNNER_TEMP/strata/report.json" --quiet
@@ -94,13 +94,17 @@ Anyone with read access to the repository can download workflow artifacts. For a
 - It has no script or external resources, so GitHub displays it in a README.
 - Add `--minimal` for the layers alone, without text, axes, or legend.
 
+### Keep it current from the Action
+
+The simplest way to keep the image current is the Action's [`image-branch` input](pr-action.md#readme-image): one step handles the pull-request delta and the image.
+
 ### Commit the image
 
-The simplest option is to render the image locally and commit it, for example to `docs/strata.svg`, and reference it with `![Agent context through time](docs/strata.svg)`. The image then changes only when you regenerate it.
+Without a workflow, render the image locally and commit it, for example to `docs/strata.svg`, and reference it with `![Agent context through time](docs/strata.svg)`. The image then changes only when you regenerate it.
 
 ### Publish it from a workflow
 
-To keep the image current automatically, the workflow below runs on every push to `main`. It:
+If you prefer a separate workflow that keeps write access out of the job running Strata, the one below runs on every push to `main`. It:
 
 1. renders the image, together with a `strata-badge.json` file for a [shields.io endpoint badge](https://shields.io/badges/endpoint-badge) that shows the latest total;
 2. force-pushes both files as the single commit of a `strata-image` branch.
@@ -136,7 +140,7 @@ jobs:
           node-version: '22'
       - name: Render image and badge
         env:
-          STRATA_VERSION: 0.8.1 # x-release-please-version
+          STRATA_VERSION: 0.9.0 # x-release-please-version
         run: |
           npx --yes "context-strata@$STRATA_VERSION" analyze "$GITHUB_WORKSPACE" --format svg --output "$RUNNER_TEMP/strata-image/strata.svg" --quiet
           npx --yes "context-strata@$STRATA_VERSION" analyze "$GITHUB_WORKSPACE" --format badge --output "$RUNNER_TEMP/strata-image/strata-badge.json" --quiet
